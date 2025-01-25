@@ -1,5 +1,5 @@
 # Use a lightweight base image with Python 3.9 from docker.io
-FROM docker.io/python:3.13-slim
+FROM docker.io/python:3.9-slim
 
 # (Optionnal)
 ENV READTHEDOCS=True
