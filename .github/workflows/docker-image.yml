@@ -4,7 +4,7 @@ name: docker-image
 on:
   push:
     branches:
-      - 'container'
+      - 'container_armv6'
 
 jobs:
   build-and-push-image:
