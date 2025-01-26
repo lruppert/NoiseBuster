@@ -16,6 +16,7 @@ RUN apt-get update && \
         software-properties-common \
         apt-transport-https \
         ca-certificates \
+        build-essential \
         libusb-1.0-0-dev \
         btop \
         htop \
