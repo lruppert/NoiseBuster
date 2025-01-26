@@ -32,4 +32,7 @@ jobs:
           context: .
           push: true
           tags: ghcr.io/lruppert/noisebuster:latest
-          platforms: linux/arm/v6,linux/amd64,linux/arm64
+          platforms:
+            - linux/amd64
+            - linux/arm64
+#            - linux/arm/v6
