@@ -31,5 +31,5 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/lruppert/noisebuster:latest
+          tags: ghcr.io/lruppert/noisebuster-lite:latest
           platforms: linux/arm/v6
