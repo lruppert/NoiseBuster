@@ -16,10 +16,6 @@ RUN apt-get update && \
         software-properties-common \
         apt-transport-https \
         ca-certificates \
-        build-essential \
-        checkinstall \
-        zlib1g-dev \
-        libssl-dev \
         libusb-1.0-0-dev \
         btop \
         htop \
