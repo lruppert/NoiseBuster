@@ -13,13 +13,11 @@ RUN apt-get update && \
         wget \
         gnupg2 \
         curl \
-        software-properties-common \
         apt-transport-https \
         ca-certificates \
         libusb-1.0-0-dev \
         btop \
         htop \
-        nano \
         net-tools \
         git && \
     apt-get clean && \
