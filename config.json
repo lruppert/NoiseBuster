@@ -50,7 +50,10 @@
         "image_save_path": "./images/",
         "image_retention_hours": 24,
         "usb_vendor_id": "",
-        "usb_product_id": ""
+        "usb_product_id": "",
+        "usb_reconnect_initial_delay": 1,
+        "usb_reconnect_max_delay": 60,
+        "usb_reconnect_max_attempts": 0
     },
     "SERIAL_CONFIG": {
       "enabled": false,

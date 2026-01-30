@@ -385,6 +385,44 @@ def detect_serial_device(verbose=True):
         logger.error(f"Unexpected error opening serial port {port}: {str(e)}")
         return None
 
+
+def reconnect_usb_device():
+    """
+    Attempts to reconnect to the USB device with exponential backoff.
+    Returns the connected USB device if successful, None otherwise.
+    """
+    # Exponential backoff parameters from config, with defaults
+    initial_delay = DEVICE_AND_NOISE_MONITORING_CONFIG.get("usb_reconnect_initial_delay", 1)  # Start with 1 second
+    max_delay = DEVICE_AND_NOISE_MONITORING_CONFIG.get("usb_reconnect_max_delay", 60)       # Max delay of 60 seconds
+    max_attempts = DEVICE_AND_NOISE_MONITORING_CONFIG.get("usb_reconnect_max_attempts", 0)  # 0 = unlimited attempts
+    current_delay = initial_delay
+    attempt_count = 0
+
+    logger.info("Attempting to reconnect to USB device with exponential backoff...")
+
+    while True:
+        attempt_count += 1
+        if max_attempts > 0 and attempt_count > max_attempts:
+            logger.error(f"Maximum reconnection attempts ({max_attempts}) reached. Exiting...")
+            return None
+
+        logger.info(f"Trying to reconnect to USB device (attempt {attempt_count}, next attempt in {current_delay}s)...")
+        usb_dev = detect_usb_device(verbose=True)
+
+        if usb_dev:
+            logger.info("Successfully reconnected to USB device!")
+            return usb_dev
+
+        # Calculate next delay with jitter to prevent thundering herd
+        import random
+        jitter = random.uniform(0.8, 1.2)  # Random multiplier to add variation
+        next_delay = min(current_delay * 2, max_delay) * jitter
+
+        logger.info(f"USB device not found. Retrying in {next_delay:.2f} seconds...")
+        time.sleep(next_delay)
+
+        current_delay = min(current_delay * 2, max_delay)  # Double the delay, capped at max_delay
+
 ####################################
 # INFLUXDB
 ####################################
@@ -742,11 +780,11 @@ def update_noise_level():
                 break
         except usb.core.USBError as usb_err:
             logger.error(f"USB Error reading: {str(usb_err)}")
-            usb_dev = detect_usb_device(verbose=False)
+            logger.info("Entering USB reconnection mode...")
+            usb_dev = reconnect_usb_device()
             if not usb_dev:
-                logger.error("Device not found on re-scan.")
-            else:
-                logger.info("Reconnected to USB device.")
+                logger.error("Failed to reconnect to USB device after multiple attempts. Exiting...")
+                break
         except Exception as e:
             logger.error(f"Unexpected error reading from device: {str(e)}")
 
