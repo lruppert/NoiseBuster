@@ -780,6 +780,20 @@ def update_noise_level():
                 break
         except usb.core.USBError as usb_err:
             logger.error(f"USB Error reading: {str(usb_err)}")
+            logger.info("Cleaning up old USB device handle...")
+
+            # Properly clean up the old device handle
+            if usb_dev is not None:
+                try:
+                    # Release any interfaces claimed by this device
+                    usb.util.dispose_resources(usb_dev)
+                    logger.debug("Released USB device resources")
+                except Exception as cleanup_err:
+                    logger.warning(f"Error during USB device cleanup: {str(cleanup_err)}")
+
+                # Set usb_dev to None to ensure we get a fresh handle
+                usb_dev = None
+
             logger.info("Entering USB reconnection mode...")
             usb_dev = reconnect_usb_device()
             if not usb_dev:
