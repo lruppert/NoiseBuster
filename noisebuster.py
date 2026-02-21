@@ -329,8 +329,12 @@ def detect_usb_device(verbose=True):
     global device_detected
     devs = usb.core.find(find_all=True)
     for dev in devs:
-        dev_vendor_id = dev.idVendor
-        dev_product_id = dev.idProduct
+        try:
+            dev_vendor_id = dev.idVendor
+            dev_product_id = dev.idProduct
+        except usb.core.USBError as e:
+            logger.debug(f"Could not read USB device attributes (skipping): {e}")
+            continue
 
         # If config specifically sets vendor/product
         if usb_vendor_id_int and usb_product_id_int:
@@ -391,10 +395,12 @@ def reconnect_usb_device():
     Attempts to reconnect to the USB device with exponential backoff.
     Returns the connected USB device if successful, None otherwise.
     """
+    import random
+
     # Exponential backoff parameters from config, with defaults
-    initial_delay = DEVICE_AND_NOISE_MONITORING_CONFIG.get("usb_reconnect_initial_delay", 1)  # Start with 1 second
-    max_delay = DEVICE_AND_NOISE_MONITORING_CONFIG.get("usb_reconnect_max_delay", 60)       # Max delay of 60 seconds
-    max_attempts = DEVICE_AND_NOISE_MONITORING_CONFIG.get("usb_reconnect_max_attempts", 0)  # 0 = unlimited attempts
+    initial_delay = DEVICE_AND_NOISE_MONITORING_CONFIG.get("usb_reconnect_initial_delay", 1)
+    max_delay = DEVICE_AND_NOISE_MONITORING_CONFIG.get("usb_reconnect_max_delay", 60)
+    max_attempts = DEVICE_AND_NOISE_MONITORING_CONFIG.get("usb_reconnect_max_attempts", 0)
     current_delay = initial_delay
     attempt_count = 0
 
@@ -406,22 +412,30 @@ def reconnect_usb_device():
             logger.error(f"Maximum reconnection attempts ({max_attempts}) reached. Exiting...")
             return None
 
-        logger.info(f"Trying to reconnect to USB device (attempt {attempt_count}, next attempt in {current_delay}s)...")
+        logger.info(f"Reconnection attempt {attempt_count} (delay so far: {current_delay}s)...")
         usb_dev = detect_usb_device(verbose=True)
 
         if usb_dev:
-            logger.info("Successfully reconnected to USB device!")
-            return usb_dev
+            # The device is enumerated, but it may not be accessible yet (e.g. Docker
+            # device permissions haven't been applied to the new node). Verify with a
+            # real transfer before declaring success.
+            try:
+                usb_dev.ctrl_transfer(0xC0, 4, 0, 0, 200)
+                logger.info("Successfully reconnected to USB device and verified communication.")
+                return usb_dev
+            except usb.core.USBError as e:
+                logger.warning(f"Device enumerated but not yet accessible ({e}). Will retry with backoff.")
+                try:
+                    usb.util.dispose_resources(usb_dev)
+                except Exception:
+                    pass
 
-        # Calculate next delay with jitter to prevent thundering herd
-        import random
-        jitter = random.uniform(0.8, 1.2)  # Random multiplier to add variation
+        # Device not found or not yet accessible — apply exponential backoff.
+        jitter = random.uniform(0.8, 1.2)
         next_delay = min(current_delay * 2, max_delay) * jitter
-
-        logger.info(f"USB device not found. Retrying in {next_delay:.2f} seconds...")
+        logger.info(f"Retrying in {next_delay:.1f}s...")
         time.sleep(next_delay)
-
-        current_delay = min(current_delay * 2, max_delay)  # Double the delay, capped at max_delay
+        current_delay = min(current_delay * 2, max_delay)
 
 ####################################
 # INFLUXDB
