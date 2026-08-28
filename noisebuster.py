@@ -471,8 +471,9 @@ InfluxDB_CLIENT, write_api = connect_influxdb()
 mqtt_client = None
 mqtt_connected = False
 if MQTT_CONFIG.get("enabled") and mqtt:
-    # Use MQTTv5 to avoid the v1 callback warning
-    mqtt_client = mqtt.Client(protocol=mqtt.MQTTv5)
+    # The callback API version is independent of the MQTT protocol version.
+    # VERSION2 is the non-deprecated callback signature set in paho-mqtt 2.x.
+    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5)
     if MQTT_CONFIG.get("tls"):
         try:
             mqtt_client.tls_set()  # If you need to set specific certs, do it here
@@ -484,44 +485,55 @@ if MQTT_CONFIG.get("enabled") and mqtt:
     if MQTT_CONFIG.get("user") and MQTT_CONFIG.get("password"):
         mqtt_client.username_pw_set(MQTT_CONFIG["user"], MQTT_CONFIG["password"])
 
+    availability_topic = f"homeassistant/sensor/{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}/noise_level/availability"
+
+    # Publish sensor config
+    def publish_sensor_config():
+        noise_sensor_config = {
+            "device_class": "sound_pressure",
+            "name": f"{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']} Noise Level",
+            "state_topic": f"homeassistant/sensor/{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}/realtime_noise_levels/state",
+            "unit_of_measurement": "dB",
+            "value_template": "{{ value_json.noise_level }}",
+            "unique_id": f"{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}_noise_level_sensor",
+            "availability_topic": availability_topic,
+            "device": {
+                "identifiers": [f"{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}_sensor"],
+                "name": f"{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']} Noise Sensor",
+                "model": "Custom Noise Sensor",
+                "manufacturer": "Silkyclouds"
+            }
+        }
+        config_topic = f"homeassistant/sensor/{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}/noise_level/config"
+        mqtt_client.publish(config_topic, json.dumps(noise_sensor_config), qos=1, retain=True)
+        logger.info(f"Sensor config published to {config_topic}")
+        mqtt_client.publish(availability_topic, "online", qos=1, retain=True)
+        logger.info(f"Sensor availability published to {availability_topic}")
+
+    def on_connect(client, userdata, flags, reason_code, properties=None):
+        global mqtt_connected
+        if reason_code == 0:
+            mqtt_connected = True
+            logger.info("MQTT client connected successfully.")
+            publish_sensor_config()
+        else:
+            mqtt_connected = False
+            logger.error(f"MQTT connection refused by broker: {reason_code}.")
+
+    def on_disconnect(client, userdata, flags, reason_code, properties=None):
+        global mqtt_connected
+        mqtt_connected = False
+        logger.info(f"MQTT disconnected: {reason_code}.")
+
+    # Register callbacks before connecting: CONNACK can arrive as soon as the
+    # network loop starts, and a callback assigned afterwards would be missed.
+    mqtt_client.on_connect = on_connect
+    mqtt_client.on_disconnect = on_disconnect
+
     try:
-        availability_topic = f"homeassistant/sensor/{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}/noise_level/availability"
         mqtt_client.will_set(availability_topic, payload="offline", qos=1, retain=True)
         mqtt_client.connect(MQTT_CONFIG["server"], MQTT_CONFIG["port"], 60)
         mqtt_client.loop_start()
-
-        # Publish sensor config
-        def publish_sensor_config():
-            noise_sensor_config = {
-                "device_class": "sound_pressure",
-                "name": f"{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']} Noise Level",
-                "state_topic": f"homeassistant/sensor/{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}/realtime_noise_levels/state",
-                "unit_of_measurement": "dB",
-                "value_template": "{{ value_json.noise_level }}",
-                "unique_id": f"{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}_noise_level_sensor",
-                "availability_topic": availability_topic,
-                "device": {
-                    "identifiers": [f"{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}_sensor"],
-                    "name": f"{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']} Noise Sensor",
-                    "model": "Custom Noise Sensor",
-                    "manufacturer": "Silkyclouds"
-                }
-            }
-            config_topic = f"homeassistant/sensor/{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}/noise_level/config"
-            mqtt_client.publish(config_topic, json.dumps(noise_sensor_config), qos=1, retain=True)
-            logger.info(f"Sensor config published to {config_topic}")
-            mqtt_client.publish(availability_topic, "online", qos=1, retain=True)
-            logger.info(f"Sensor availability published to {availability_topic}")
-
-        def on_connect(client, userdata, flags, reasonCode, properties=None):
-            if reasonCode == 0:
-                logger.info("MQTT client connected successfully.")
-                publish_sensor_config()
-            else:
-                logger.info("MQTT disconnected.")
-        mqtt_client.on_connect = on_connect
-        mqtt_connected = True
-#        publish_sensor_config()
     except Exception as e:
         logger.error(f"Failed to connect to MQTT broker: {str(e)}")
         MQTT_CONFIG["enabled"] = False
