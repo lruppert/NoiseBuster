@@ -128,16 +128,18 @@ ch = logging.StreamHandler()
 ch.setLevel(logging.INFO)
 console_formatter = ColoredFormatter('%(asctime)s - %(levelname)s - %(message)s')
 ch.setFormatter(console_formatter)
-
-# File handler
-fh = logging.FileHandler('noisebuster.log')
-fh.setLevel(logging.DEBUG)
-file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-fh.setFormatter(file_formatter)
-
 logger.addHandler(ch)
-logger.addHandler(fh)
-logger.info("Detailed logs are saved in 'noisebuster.log'.")
+
+# File handler: only add if LOCAL_LOGGING is enabled in config
+if config.get("LOCAL_LOGGING", True):
+    fh = logging.FileHandler('noisebuster.log')
+    fh.setLevel(logging.DEBUG)
+    file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    fh.setFormatter(file_formatter)
+    logger.addHandler(fh)
+    logger.info("Detailed logs are saved in 'noisebuster.log'.")
+else:
+    logger.info("Local logging has been disabled in config.json.")
 
 ####################################
 # LOAD USB IDs
@@ -327,8 +329,12 @@ def detect_usb_device(verbose=True):
     global device_detected
     devs = usb.core.find(find_all=True)
     for dev in devs:
-        dev_vendor_id = dev.idVendor
-        dev_product_id = dev.idProduct
+        try:
+            dev_vendor_id = dev.idVendor
+            dev_product_id = dev.idProduct
+        except usb.core.USBError as e:
+            logger.debug(f"Could not read USB device attributes (skipping): {e}")
+            continue
 
         # If config specifically sets vendor/product
         if usb_vendor_id_int and usb_product_id_int:
@@ -344,10 +350,10 @@ def detect_usb_device(verbose=True):
                 return dev
         else:
             # If not specifically set, check the usb_ids file
-            known = next((m for (vid, pid, m) in usb_ids if vid == dev_vendor_id and pid == dev_product_id), None)
+            known = next((m for m in usb_ids if m[0] == dev_vendor_id and m[1] == dev_product_id), None)
             if known:
                 if verbose or not device_detected:
-                    logger.info(f"{known} sound meter detected (Vendor {hex(dev_vendor_id)}, Product {hex(dev_product_id)})")
+                    logger.info(f"{known[2]} sound meter detected (Vendor {hex(dev_vendor_id)}, Product {hex(dev_product_id)})")
                 device_detected = True
                 return dev
             else:
@@ -383,6 +389,54 @@ def detect_serial_device(verbose=True):
         logger.error(f"Unexpected error opening serial port {port}: {str(e)}")
         return None
 
+
+def reconnect_usb_device():
+    """
+    Attempts to reconnect to the USB device with exponential backoff.
+    Returns the connected USB device if successful, None otherwise.
+    """
+    import random
+
+    # Exponential backoff parameters from config, with defaults
+    initial_delay = DEVICE_AND_NOISE_MONITORING_CONFIG.get("usb_reconnect_initial_delay", 1)
+    max_delay = DEVICE_AND_NOISE_MONITORING_CONFIG.get("usb_reconnect_max_delay", 60)
+    max_attempts = DEVICE_AND_NOISE_MONITORING_CONFIG.get("usb_reconnect_max_attempts", 0)
+    current_delay = initial_delay
+    attempt_count = 0
+
+    logger.info("Attempting to reconnect to USB device with exponential backoff...")
+
+    while True:
+        attempt_count += 1
+        if max_attempts > 0 and attempt_count > max_attempts:
+            logger.error(f"Maximum reconnection attempts ({max_attempts}) reached. Exiting...")
+            return None
+
+        logger.info(f"Reconnection attempt {attempt_count} (delay so far: {current_delay}s)...")
+        usb_dev = detect_usb_device(verbose=True)
+
+        if usb_dev:
+            # The device is enumerated, but it may not be accessible yet (e.g. Docker
+            # device permissions haven't been applied to the new node). Verify with a
+            # real transfer before declaring success.
+            try:
+                usb_dev.ctrl_transfer(0xC0, 4, 0, 0, 200)
+                logger.info("Successfully reconnected to USB device and verified communication.")
+                return usb_dev
+            except usb.core.USBError as e:
+                logger.warning(f"Device enumerated but not yet accessible ({e}). Will retry with backoff.")
+                try:
+                    usb.util.dispose_resources(usb_dev)
+                except Exception:
+                    pass
+
+        # Device not found or not yet accessible — apply exponential backoff.
+        jitter = random.uniform(0.8, 1.2)
+        next_delay = min(current_delay * 2, max_delay) * jitter
+        logger.info(f"Retrying in {next_delay:.1f}s...")
+        time.sleep(next_delay)
+        current_delay = min(current_delay * 2, max_delay)
+
 ####################################
 # INFLUXDB
 ####################################
@@ -417,8 +471,9 @@ InfluxDB_CLIENT, write_api = connect_influxdb()
 mqtt_client = None
 mqtt_connected = False
 if MQTT_CONFIG.get("enabled") and mqtt:
-    # Use MQTTv5 to avoid the v1 callback warning
-    mqtt_client = mqtt.Client(protocol=mqtt.MQTTv5)
+    # The callback API version is independent of the MQTT protocol version.
+    # VERSION2 is the non-deprecated callback signature set in paho-mqtt 2.x.
+    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, protocol=mqtt.MQTTv5)
     if MQTT_CONFIG.get("tls"):
         try:
             mqtt_client.tls_set()  # If you need to set specific certs, do it here
@@ -430,44 +485,55 @@ if MQTT_CONFIG.get("enabled") and mqtt:
     if MQTT_CONFIG.get("user") and MQTT_CONFIG.get("password"):
         mqtt_client.username_pw_set(MQTT_CONFIG["user"], MQTT_CONFIG["password"])
 
+    availability_topic = f"homeassistant/sensor/{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}/noise_level/availability"
+
+    # Publish sensor config
+    def publish_sensor_config():
+        noise_sensor_config = {
+            "device_class": "sound_pressure",
+            "name": f"{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']} Noise Level",
+            "state_topic": f"homeassistant/sensor/{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}/realtime_noise_levels/state",
+            "unit_of_measurement": "dB",
+            "value_template": "{{ value_json.noise_level }}",
+            "unique_id": f"{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}_noise_level_sensor",
+            "availability_topic": availability_topic,
+            "device": {
+                "identifiers": [f"{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}_sensor"],
+                "name": f"{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']} Noise Sensor",
+                "model": "Custom Noise Sensor",
+                "manufacturer": "Silkyclouds"
+            }
+        }
+        config_topic = f"homeassistant/sensor/{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}/noise_level/config"
+        mqtt_client.publish(config_topic, json.dumps(noise_sensor_config), qos=1, retain=True)
+        logger.info(f"Sensor config published to {config_topic}")
+        mqtt_client.publish(availability_topic, "online", qos=1, retain=True)
+        logger.info(f"Sensor availability published to {availability_topic}")
+
+    def on_connect(client, userdata, flags, reason_code, properties=None):
+        global mqtt_connected
+        if reason_code == 0:
+            mqtt_connected = True
+            logger.info("MQTT client connected successfully.")
+            publish_sensor_config()
+        else:
+            mqtt_connected = False
+            logger.error(f"MQTT connection refused by broker: {reason_code}.")
+
+    def on_disconnect(client, userdata, flags, reason_code, properties=None):
+        global mqtt_connected
+        mqtt_connected = False
+        logger.info(f"MQTT disconnected: {reason_code}.")
+
+    # Register callbacks before connecting: CONNACK can arrive as soon as the
+    # network loop starts, and a callback assigned afterwards would be missed.
+    mqtt_client.on_connect = on_connect
+    mqtt_client.on_disconnect = on_disconnect
+
     try:
-        availability_topic = f"homeassistant/sensor/{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}/noise_level/availability"
         mqtt_client.will_set(availability_topic, payload="offline", qos=1, retain=True)
         mqtt_client.connect(MQTT_CONFIG["server"], MQTT_CONFIG["port"], 60)
         mqtt_client.loop_start()
-
-        # Publish sensor config
-        def publish_sensor_config():
-            noise_sensor_config = {
-                "device_class": "sound_pressure",
-                "name": f"{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']} Noise Level",
-                "state_topic": f"homeassistant/sensor/{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}/realtime_noise_levels/state",
-                "unit_of_measurement": "dB",
-                "value_template": "{{ value_json.noise_level }}",
-                "unique_id": f"{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}_noise_level_sensor",
-                "availability_topic": availability_topic,
-                "device": {
-                    "identifiers": [f"{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}_sensor"],
-                    "name": f"{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']} Noise Sensor",
-                    "model": "Custom Noise Sensor",
-                    "manufacturer": "Silkyclouds"
-                }
-            }
-            config_topic = f"homeassistant/sensor/{DEVICE_AND_NOISE_MONITORING_CONFIG['device_name']}/noise_level/config"
-            mqtt_client.publish(config_topic, json.dumps(noise_sensor_config), qos=1, retain=True)
-            logger.info(f"Sensor config published to {config_topic}")
-            mqtt_client.publish(availability_topic, "online", qos=1, retain=True)
-            logger.info(f"Sensor availability published to {availability_topic}")
-
-        def on_connect(client, userdata, flags, reasonCode, properties=None):
-            if reasonCode == 0:
-                logger.info("MQTT client connected successfully.")
-                publish_sensor_config()
-            else:
-                logger.info("MQTT disconnected.")
-        mqtt_client.on_connect = on_connect
-        mqtt_connected = True
-#        publish_sensor_config()
     except Exception as e:
         logger.error(f"Failed to connect to MQTT broker: {str(e)}")
         MQTT_CONFIG["enabled"] = False
@@ -740,11 +806,25 @@ def update_noise_level():
                 break
         except usb.core.USBError as usb_err:
             logger.error(f"USB Error reading: {str(usb_err)}")
-            usb_dev = detect_usb_device(verbose=False)
+            logger.info("Cleaning up old USB device handle...")
+
+            # Properly clean up the old device handle
+            if usb_dev is not None:
+                try:
+                    # Release any interfaces claimed by this device
+                    usb.util.dispose_resources(usb_dev)
+                    logger.debug("Released USB device resources")
+                except Exception as cleanup_err:
+                    logger.warning(f"Error during USB device cleanup: {str(cleanup_err)}")
+
+                # Set usb_dev to None to ensure we get a fresh handle
+                usb_dev = None
+
+            logger.info("Entering USB reconnection mode...")
+            usb_dev = reconnect_usb_device()
             if not usb_dev:
-                logger.error("Device not found on re-scan.")
-            else:
-                logger.info("Reconnected to USB device.")
+                logger.error("Failed to reconnect to USB device after multiple attempts. Exiting...")
+                break
         except Exception as e:
             logger.error(f"Unexpected error reading from device: {str(e)}")
 
@@ -903,8 +983,6 @@ def main():
         logger.info("Starting Noise Monitoring on USB device.")
 
     # Possibly send a Pushover on start
-
-
     if PUSHOVER_CONFIG.get("enabled"):
         send_pushover_notification("Noise Buster has started monitoring.")
 

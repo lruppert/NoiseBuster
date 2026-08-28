@@ -1,5 +1,5 @@
-# Use a lightweight base image with Python 3.9 from docker.io
-FROM docker.io/python:3.9-slim
+# Use a lightweight base image with Python from docker.io
+FROM docker.io/python:3.14-slim
 
 # (Optionnal)
 ENV READTHEDOCS=True
@@ -13,13 +13,11 @@ RUN apt-get update && \
         wget \
         gnupg2 \
         curl \
-        software-properties-common \
         apt-transport-https \
         ca-certificates \
         libusb-1.0-0-dev \
         btop \
         htop \
-        nano \
         net-tools \
         git && \
     apt-get clean && \
