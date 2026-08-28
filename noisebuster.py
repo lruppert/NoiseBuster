@@ -8,6 +8,7 @@
 #   - [Alexander Koch] Added serial device support
 #   - [lruppert] Docker + TLS option for MQTT
 #   - [Current Merge] Fix MQTT deprecation warning, fallback from Serial to USB
+#   - Enhancements added by dependabot and Claude Code guided by lruppert
 
 import sys
 import os
