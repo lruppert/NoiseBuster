@@ -1,0 +1,61 @@
+---
+name: docker-images
+
+# Replaces the old per-branch workflows: the 'container' branch built the full
+# image and 'container_armv6' built the lite one. Both variants now build from
+# main, differing only by build inputs (see the matrix below).
+on:
+  push:
+    branches:
+      - 'main'
+  workflow_dispatch:
+
+jobs:
+  build-and-push-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      # Keep building the full image even if the emulated lite build fails.
+      fail-fast: false
+      matrix:
+        include:
+          - variant: full
+            image: noisebuster
+            platforms: linux/amd64
+            requirements: requirements.txt
+          - variant: lite
+            image: noisebuster-lite
+            platforms: linux/arm/v6
+            requirements: requirements_lite.txt
+
+    name: ${{ matrix.variant }} (${{ matrix.platforms }})
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Only the arm build needs emulation; amd64 runs native on the runner.
+      - name: Set up QEMU
+        if: matrix.variant == 'lite'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/lruppert/${{ matrix.image }}:latest
+          platforms: ${{ matrix.platforms }}
+          build-args: |
+            REQUIREMENTS=${{ matrix.requirements }}

@@ -1,7 +1,8 @@
 # Use a lightweight base image with Python from docker.io
 FROM docker.io/python:3.14-slim
 
-# (Optionnal)
+# picamera's setup.py aborts unless it detects a Raspberry Pi; READTHEDOCS is
+# its documented bypass. Required to build this image anywhere but a Pi.
 ENV READTHEDOCS=True
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -23,10 +24,15 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Selects the dependency set, and so which image variant this is:
+#   requirements.txt      -> full image (adds OpenCV + numpy for IP cameras)
+#   requirements_lite.txt -> lite image (pure-Python deps only)
+ARG REQUIREMENTS=requirements.txt
+
 # Copy the main Python script, config file, and dependencies list
 COPY noisebuster.py .
 COPY config.json .
-COPY requirements.txt .
+COPY ${REQUIREMENTS} ./requirements.txt
 
 # Upgrade pip (conseillé)
 RUN pip install --upgrade pip

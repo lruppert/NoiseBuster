@@ -1,0 +1,14 @@
+# Dependency set for the "lite" image (ghcr.io/lruppert/noisebuster-lite).
+#
+# This is requirements.txt without opencv-python-headless and numpy, so the
+# IP-camera capture feature is unavailable in this variant.
+#
+# Every package here must ship a pure-Python wheel. The lite image is built for
+# armv6 under QEMU emulation, where anything needing compilation turns a short
+# build into a multi-hour one. Do not add a package with C extensions.
+paho-mqtt==2.1.0
+requests==2.28.2
+picamera==1.13
+influxdb-client==1.50.0
+pyusb==1.3.1
+schedule==1.2.2
