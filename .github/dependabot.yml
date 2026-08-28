@@ -1,0 +1,25 @@
+---
+version: 2
+updates:
+  - package-ecosystem: "docker" # See documentation for possible values
+    directory: "/" # Location of package manifests
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+      day: "saturday"
+      time: "00:00"
+      timezone: "Etc/UTC"
+    assignees:
+      - "lruppert"
+
+
+  # Maintain dependencies for Python
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "saturday"
+      time: "00:00"
+      timezone: "Etc/UTC"
+    assignees:
+      - "lruppert"
