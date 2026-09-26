@@ -121,12 +121,19 @@ class ColoredFormatter(logging.Formatter):
         record.msg = f"{color}{record.msg}{self.RESET}"
         return super().format(record)
 
+valid_log_levels = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+configured_log_level = str(config.get("LOG_LEVEL", "INFO")).upper()
+if configured_log_level not in valid_log_levels:
+    print(f"Invalid LOG_LEVEL '{configured_log_level}' in config.json, defaulting to INFO.")
+    configured_log_level = "INFO"
+LOG_LEVEL = getattr(logging, configured_log_level)
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 # Console handler
 ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
+ch.setLevel(LOG_LEVEL)
 console_formatter = ColoredFormatter('%(asctime)s - %(levelname)s - %(message)s')
 ch.setFormatter(console_formatter)
 logger.addHandler(ch)
@@ -134,7 +141,7 @@ logger.addHandler(ch)
 # File handler: only add if LOCAL_LOGGING is enabled in config
 if config.get("LOCAL_LOGGING", True):
     fh = logging.FileHandler('noisebuster.log')
-    fh.setLevel(logging.DEBUG)
+    fh.setLevel(LOG_LEVEL)
     file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     fh.setFormatter(file_formatter)
     logger.addHandler(fh)

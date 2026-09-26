@@ -11,6 +11,7 @@
         "ssl": false
     },
     "LOCAL_LOGGING": true,
+    "LOG_LEVEL": "ERROR",
     "PUSHOVER_CONFIG": {
         "enabled": false,
         "user_key": "<YOUR_PUSHOVER_USER_KEY>",
