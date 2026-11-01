@@ -1,5 +1,5 @@
 # Use a lightweight base image with Python from docker.io
-FROM docker.io/python:3.14-slim
+FROM docker.io/python:3.15-slim
 
 # picamera's setup.py aborts unless it detects a Raspberry Pi; READTHEDOCS is
 # its documented bypass. Required to build this image anywhere but a Pi.
